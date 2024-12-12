@@ -1,0 +1,481 @@
+---
+title: "Graphical model with R"
+author: "Masanao Yajima"
+date: "1/29/2023"
+output: html_document
+---
+
+```{css,echo=FALSE}
+.btn {
+    border-width: 0 0px 0px 0px;
+    font-weight: normal;
+    text-transform: ;
+}
+
+.btn-default {
+    color: #2ecc71;
+    background-color: #ffffff;
+    border-color: #ffffff;
+}
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,fig.width=8,fig.height=7 ,out.width="90%",fig.align = "center")
+pacman::p_load(
+  ggplot2
+  ,reshape2
+  ,ggdag
+)
+par(mar=c(3,3,2,1), mgp=c(2,.7,0), tck=-.01)
+```
+
+```{r,echo=FALSE}
+# Global parameter
+show_code <- TRUE
+```
+
+# Class Workbook {.tabset .tabset-fade .tabset-pills}
+
+## In class activity
+
+No Github activity for this class.
+
+## Graphical model with R
+
+You will need to install the packages gRbase and Rgraphviz.
+```{r,eval=FALSE}
+install.packages("gRbase")
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("Rgraphviz")
+```
+
+```{r,message=FALSE}
+pacman::p_load(Rgraphviz,gRbase,gRain,RBGL,ggdag,ggplot2)
+```
+
+### Creating a graph object
+#### Undirected Graph
+
+There are multiple ways to specify a graph.
+First, for an undirected graph, you can define it as a set of cliques.
+A clique is a subset of vertices of an undirected graph such that every two distinct vertices in the clique are adjacent. 
+
+```{r}
+ug0 <- ug(~a:b, ~b:c:d, ~e)
+ug0 <- ug(~a:b+b:c:d+e)
+ug0 <- ug(~a*b+b*c*d+e)
+ug0 <- ug(c("a","b"),c("b","c","d"),"e")
+plot(ug0)
+```
+
+##### Attributes
+
+```{r}
+nodes(ug0)
+edges(ug0)
+edgeList(ug0)
+is.complete(ug0)
+is.complete(ug0, c("b","c","d"))
+
+subGraph(c("b","c","d","e"), ug0)
+
+```
+
+
+#### Directed Graph
+
+For a DAG there are multiple ways.
+```{r}
+dag0 <- dag(~a, ~b*a, ~c*a*b, ~d*c*e, ~e*a, ~g*f)
+dag0<- dag(~a + b*a + c*a*b + d*c*e + e*a + g*f)
+dag0<- dag(~a + b|a + c|a*b + d|c*e + e|a + g|f)
+dag0<- dag("a", c("b","a"), c("c","a","b"), c("d","c","e"),
+       c("e","a"),c("g","f"))
+plot(dag0)
+```
+
+#### Graph components
+
+```{r}
+nodes(dag0)
+edges(dag0)
+edgeList(dag0)
+parents("d",dag0)
+children("c",dag0)
+ancestralSet(c("b","e"),dag0)
+ancestralGraph(c("b","e"),dag0)
+```
+
+
+### Operation on graphs
+
+You can moralize a DAG and get an equivalent undirected graph.
+
+```{r}
+dag0m <- moralize(dag0)
+plot(dag0m)              
+```
+D-separation
+```{r}
+library(igraph)
+library("pcalg")
+#dsep("d","a",c("e","c"),g=dag0)
+library(ggm)
+dSep(as(dag0, "matrix"), "c", "e", "a")
+```
+
+
+### Bayesian Networks
+
+The term Bayesian network originates from Bayesian inference in expert systems.  Representing a joint probability distribution using a directed acyclic graph (a DAG) and exploiting the conditional independencies enable one to perform rapid and efficient computation of updated probabilities for states of unobserved variables.  Let's look at an example.
+
+  Having flu (F) may cause elevated temperature (T). Elevated temperature may cause a headache (H). 
+
+This relationship can be written in probability notation as
+$$p(FTH)=p(F)p(T|F)p(H|T)$$
+
+This relationship can be expressed as a DAG in the following way
+```{r}
+#plot((FTH<-dag(~ F + T:F + H:T)), "circo")
+```
+
+Now you have a headache, what is the probability of the flu $p(F=yes|H=yes)$ or you have a fever $p(T=yes|H=yes)$?
+
+For this we need $p(F)$, $p(T|F)$, and $p(H|T)$.  We are going to pretend we know this information.
+
+Unconditionally we will say that you get the flu with 1% probability.
+
+```{r}
+yn <- c("yes", "no")
+uni <- list(F = yn, T = yn, H = yn)
+(p.F   <- parray("F", levels=uni, values=c(.01,.99)))
+```
+
+As for $p(T|F)$, we will say that given the flu, you will have a 95% probability of fever, but with no flu, you will have a 0.1% fever.
+
+```{r}
+(p.TgF <- parray(c("T","F"), levels=uni, values=c(.95,.05, .001,.999)))
+```
+
+As for $p(H|T)$, we will say that given a fever, you will have an 80% probability of headache, and with out a fever 1% probability of headache.
+```{r}
+(p.HgT <- parray(c("H","T"), levels=uni, values=c(.80,.20, .010,.990)))
+```
+
+We can get the joint probability of flu and fever $p(FT)=p(T|F)p(F)$
+```{r}
+p.FT <- tableMult(p.F, p.TgF)
+p.FT
+
+```
+
+and flu, fever, and headache $p(FTH)=p(H|T)p(FT)$
+```{r}
+p.FTH <- tableMult(p.FT, p.HgT)
+as.data.frame.table(p.FTH)
+flat <- function(x){ftable(x, row.vars=1)}
+flat(p.FTH)
+```
+
+
+To calculate $p(F|H)$ we need $p(FH)$ and $p(H)$.
+For this we marginalize $p(FTH)$ wrt $T$ so that $p(FH)=\sum_T p(FTH)$
+```{r}
+p.FH <- tableMargin(p.FTH, margin=c('F','H'))
+as.data.frame.table(p.FH)
+```
+
+```{r}
+p.H   <- tableMargin(p.FH, margin='H')
+p.H
+```
+
+From there, we can calculate the conditional probability
+$$p(F|H)=\frac{p(FH)}{p(H)}=\frac{p(H|F)p(F)}{p(H)}$$
+```{r}
+(p.FgH <- tableDiv(p.FH, p.H))
+```
+$p(Flu=\mbox{yes} | Headache=\mbox{yes})=0.42$
+
+
+
+### Bayesian networks using the gRain package
+
+The chest clinic example from Lauritzen and Spiegelhalter (1988).
+```{r}
+g<-list(~asia, 
+        ~tub    | asia, 
+        ~smoke, 
+        ~lung   | smoke, 
+        ~bronc  | smoke,  
+        ~either | lung : tub, 
+        ~xray   | either, 
+        ~dysp   | bronc : either) 
+chestdag <- gRbase::dagList(g)
+```
+
+DAGs can be plotted nicely as
+```{r}
+plot(chestdag)
+```
+
+The moralized graph
+```{r}
+plot(moralize(chestdag))
+```
+
+Checking for d-separation.
+```{r}
+# d.separates <- function(a,b,c,dag) {
+#  RBGL::separates(a,b,c,
+#  gRbase::moralize(ancestralGraph(union(union(a,b),c),
+# dag)))
+# }
+# d.separates("tub", "smoke", c("dysp","xray"), chestdag)
+# d.separates("tub", "lung", "smoke", chestdag)
+```
+
+Learning the parameters from the data given the model.
+```{r}
+data(chestSim1000, package="gRbase")
+bn <- grain(chestdag, data=chestSim1000, smooth=.1)
+```
+
+Before observing any evidence
+```{r}
+disease <- c("tub","lung","bronc")
+querygrain(bn, nodes=disease)
+```
+
+If you have shortness of breath and if you went to "Asia".
+```{r}
+bn.ev <- setEvidence(bn, evidence=list(asia="yes",dysp="yes"))
+querygrain(bn.ev, nodes=disease)
+```
+
+After seeing x-ray is yes
+```{r}
+bn.ev <- setEvidence(bn.ev, evidence=list(xray="yes"))
+querygrain(bn.ev, nodes=disease)
+``` 
+
+You can also get the joint probability.
+```{r}
+querygrain(bn.ev,nodes=c("lung","bronc"), type="joint")
+```
+
+
+### Bayesian networks using bnlearn package
+
+```{r}
+library(bnlearn)
+bnchestdag<-as.bn(chestdag)
+dag3 <- bnlearn::model2network("[asia][tub|asia][smoke][lung|smoke][bronc|smoke][either|lung:tub][xray|either][dysp|bronc:either]")
+all.equal(bnchestdag, dag3)
+```
+
+```{r}
+bn.mle <- bnlearn::bn.fit(bnchestdag, 
+                          data=chestSim1000, 
+                          method = "mle")
+```
+
+When there is no observation, MLE will be NaN.  We can amend that by adding imaginary sample size.
+
+```{r}
+bn.bayes <- bnlearn::bn.fit(bnchestdag, 
+                           data=chestSim1000, 
+                           method = "bayes", 
+                           iss = 10)
+```
+
+```{r}
+prop.table(table(chestSim1000[, c("lung", "smoke")]), margin = 2)
+bn.mle$lung
+```
+
+### Learning the network structure
+
+Graph structure estimation is a hot topic we will not be able to cover we will just look at few examples.
+
+### Hill-climbing algorithm 
+
+hc function in the bnlearn package implements hill-climbing algorithm to select a graphical model.  It uses greedy search to optimize a score, such as the BIC. This means that the current DAG is compared to all DAGs obtained by adding an edge, removing an edge, or reversing the direction of an edge. The model with the optimal score is chosen, and the process repeats until no score improvement can be made.  
+
+
+```{r}
+library(bnlearn)
+cad.bn <- hc(chestSim1000)
+bnlearn::modelstring(cad.bn)
+bnlearn::score(cad.bn, data = chestSim1000, type = "bic")
+actc<-arc.strength(cad.bn, data = chestSim1000, criterion = "bic")
+strength.plot(cad.bn,actc)
+plot(as(amat(cad.bn), "graphNEL"))
+```
+
+Essential graph
+```{r}
+library(ggm)
+plot(as(essentialGraph(amat(cad.bn)), "graphNEL"))
+```
+
+### A Hybrid Algorithm.
+
+The max-min hill-climbing algorithm is a hybrid constraint/score-based algorithm implemented as mmhc function. 
+```{r}
+mmhc.bn <- mmhc(chestSim1000,
+                blacklist = data.frame(from=c("xray"),to=c("dysp")))
+
+plot(as(amat(mmhc.bn), "graphNEL"))
+```
+
+### Gaussian Graphical model example
+
+Sample correlation are misleading.  Here is one illustration of why.
+We will generate from multivariate Gaussian distribution.
+```{r}
+#http://people.math.aau.dk/~sorenh/misc/2016-gmbn-rennes/doc/bayesnet-slides.pdf
+K <- matrix(c(2,1,0,
+              1,2,1,
+              0,1,2), 3, 3)
+K
+```
+
+K is the TRUE inverse covariance matrix or the precision matrix where Zero in the matrices implies independence.
+
+But when you take an inverse of the precision matrix, what you get is
+```{r}
+Sigma <- solve(K)
+Sigma
+```
+
+You generate data from MVN using this variance-covariance matrix and you get
+```{r}
+d <- data.frame(MASS::mvrnorm(100, mu=c(0,0,0), Sigma=Sigma))
+pairs(d)
+```
+
+```{r}
+cor(d)
+```
+
+Both plot and correlation suggest a mild correlation between 1 and 3, and they are both correlated with 2.
+
+Let's look at the partial correlation by regressing out the effect of 2 from both 1 and 3.
+
+```{r}
+r1.2 <- resid( lm( X1 ~ X2, data=d) )
+r3.2 <- resid( lm( X3 ~ X2, data=d) )
+plot(r1.2, r3.2)
+```
+
+The correlation disappeared
+
+```{r}
+cor(r1.2, r3.2)
+```
+
+You can do the same using regression.
+```{r}
+coef( summary( lm( X1 ~ X2 + X3, data=d) ) )
+```
+
+The bottom line is that correlation is a dangerous thing to look too much into; if possible, one should look at partial correlation.
+
+
+
+### Causal DAG
+
+
+Another package, `ggdag`, plots DAGs using ggplot.
+You can find more info here: https://cran.r-project.org/web/packages/ggdag/vignettes/intro-to-dags.html
+
+```{r}
+theme_set(theme_dag())
+dagify(y ~ x) %>%
+  ggdag()
+dagify(
+  y ~ x,
+  x ~ a,
+  a ~ y
+) %>%
+  ggdag()
+```
+
+A bidirectional model can be plotted as.
+
+```{r}
+dagify(y ~ ~x) %>%
+  ggdag()
+```
+```{r}
+xray_lung_bronc_dag <- dagify(
+        tub  ~asia, 
+        lung   ~ smoke, 
+        bronc  ~ smoke,  
+        either ~ tub,
+        either ~ lung , 
+        xray   ~ either, 
+        dysp  ~ either,
+        dysp   ~ bronc,
+          labels = c(
+    "tub" = "tuberculosis,",
+    "smoke" = "Smoking",
+    "lung" = "lung cancer",
+    "bronc" = "bronchitis",
+    "asia" = "going to Asia",
+    "either" = "either",
+    "xray" = "X-ray",
+    "dysp" ="dyspnoea"
+  )
+          ) 
+ggdag(xray_lung_bronc_dag)
+
+ggdag_dseparated(xray_lung_bronc_dag, text = FALSE,use_labels = "label",
+                 from="tub",to="lung",
+                 controlling_for = c("smoke"))
+```
+
+```{r}
+smoking_ca_dag <- dagify(cardiacarrest ~ cholesterol,
+  cholesterol ~ smoking + weight,
+  smoking ~ unhealthy,
+  weight ~ unhealthy,
+  labels = c(
+    "cardiacarrest" = "Cardiac\n Arrest",
+    "smoking" = "Smoking",
+    "cholesterol" = "Cholesterol",
+    "unhealthy" = "Unhealthy\n Lifestyle",
+    "weight" = "Weight"
+  ),
+  latent = "unhealthy",
+  exposure = "smoking",
+  outcome = "cardiacarrest"
+)
+
+ggdag(smoking_ca_dag, text = FALSE, use_labels = "label")
+```
+
+```{r}
+fever_dag <- collider_triangle(
+  x = "Influenza",
+  y = "Chicken Pox",
+  m = "Fever"
+)
+
+ggdag(fever_dag, text = FALSE, use_labels = "label")
+```
+
+```{r}
+ggdag_dseparated(fever_dag, text = FALSE, use_labels = "label")
+```
+
+```{r}
+ggdag_dseparated(fever_dag,
+  controlling_for = "m",
+  text = FALSE, use_labels = "label"
+)
+```
+
